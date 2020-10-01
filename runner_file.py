@@ -33,6 +33,8 @@ from scipy import interp
 import math
 from lightgbm import LGBMModel,LGBMClassifier
 import glob
+import tensorflow as tf
+
 def create_dataset(path):
     df = pd.read_csv(path)
     data = df.values
@@ -62,6 +64,20 @@ def evaluation_per_class(y, pred_y):
     acc = float(TP + TN) / float(total_label_list[0] + total_label_list[1])
     return sens, spec, PPV, f1, acc
 
+# define fully connected neural network using Tensorflow Keras
+def get_dnn(X_train):
+    init = tf.keras.initializers.glorot_uniform(seed=1)
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.Dense(units=128, input_dim=np.shape(X_train)[1], kernel_initializer=init, activation='relu', kernel_regularizer=tf.keras.regularizers.l1_l2(0.000,0.01)))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.Dense(units=64, kernel_initializer=init, activation='relu',kernel_regularizer=tf.keras.regularizers.l1_l2(0.000,0.01)))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.Dense(units=32, kernel_initializer=init, activation='relu'))
+    model.add(tf.keras.layers.Dense(units=1, kernel_initializer=init, activation='sigmoid',kernel_regularizer=tf.keras.regularizers.l1_l2(0.000,0.01)))
+    #model.compile(loss='binary_crossentropy', optimizer= optimizers.adam(lr=0.001), metrics=['accuracy',tf.keras.metrics.AUC(),tf.keras.metrics.Recall(),])
+    model.compile(loss='binary_crossentropy', optimizer= tf.keras.optimizers.Adam(lr=0.01,decay=0.9), metrics=['accuracy',tf.keras.metrics.AUC(),tf.keras.metrics.Recall(),])
+    return model
+
 def predict( clf_ind,dataset, labelset, train, test):
     result = np.zeros((1,9))
     train_dataset = dataset[train]
@@ -78,6 +94,9 @@ def predict( clf_ind,dataset, labelset, train, test):
         clf = LogisticRegression(solver='newton-cg', max_iter=1000, n_jobs=1)
     if clf_ind == 2:
         clf = RandomForestClassifier(n_estimators=300, max_depth=200, min_samples_split=4, max_features='sqrt',n_jobs=-1)
+    if clf_ind == 3:
+        # call fully connected neural network
+        clf = get_dnn(train_dataset)
     if clf_ind == 5:
         linear_svc = SGDClassifier(loss='hinge', penalty='l2', alpha=0.0001, max_iter=1000, shuffle=True,
                             learning_rate='optimal',n_jobs=-1)
@@ -86,15 +105,25 @@ def predict( clf_ind,dataset, labelset, train, test):
                                                 method='sigmoid',
                                                 # sigmoid will use Platt's scaling. Refer to documentation for other methods.
                                                 cv=5)
-    # train ML model
-    clf.fit(train_dataset, train_labelset)
-    y_test_pred = clf.predict_proba(train_dataset)[:, 1]
+    # train ML models
+    if(clf_ind !=3 ):
+        clf.fit(train_dataset, train_labelset)
+        y_test_pred = clf.predict_proba(train_dataset)[:, 1]
+    # train fully connected neural network
+    else:
+        b_size = 2048
+        max_epochs = 100
+        clf.fit(train_dataset, train_labelset, batch_size=b_size, epochs=max_epochs, shuffle=True, verbose=1)
+        y_test_pred = clf.predict(train_dataset)
     fpr, tpr, thres = roc_curve(train_labelset, y_test_pred)
     auc_train = auc(fpr, tpr)
     prec, rec, _ = precision_recall_curve(train_labelset, y_test_pred)
     prc_train = auc(rec, prec)
-    # calculate AUROC, AUPRC
-    y_test_pred = clf.predict_proba(test_dataset)[:, 1]
+    # calculate AUROC, AUPRC for ML models
+    if(clf_ind!=3):
+        y_test_pred = clf.predict_proba(test_dataset)[:, 1]
+    else:
+        y_test_pred = clf.predict(test_dataset)
     fpr, tpr, thres = roc_curve(test_labelset, y_test_pred)
     auc_value = auc(fpr, tpr)
     prec, rec, _ = precision_recall_curve(test_labelset, y_test_pred)
